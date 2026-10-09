@@ -38,6 +38,15 @@ Native UI testing on Apple silicon repeated rectangle capture, window capture, f
 
 ## Repository scope
 
-This repository contains the native Mac implementation and synthetic tests. Original Windows binaries, decompiler outputs, private screenshots, logs, local machine configuration, and generated application packages are excluded. No Microsoft binaries or assets are distributed here.
+This repository contains the native Mac implementation, synthetic tests, Windows reference inputs, and their static-analysis exports:
+
+- `mac/` contains the native Swift implementation and build tools.
+- `tests/` contains synthetic regression checks and performance benchmarks.
+- `binaries/` contains the Microsoft Windows reference executables, WinRT metadata, and package manifest.
+- `assembly/` contains disassembly exports from the Windows executables.
+- `cpp/` contains Ghidra C-like pseudocode, which is analysis output rather than recovered original C++ or buildable Mac source.
+- `dmg/SnipForMac.dmg` contains the packaged native Mac app built from the current Mac source.
+
+Private screenshots, QA logs, local configuration, and intermediate builds remain excluded. The Windows reference files are Microsoft components; the native Mac app is built from `mac/Sources` and uses its own generated icon.
 
 No open-source license has been selected yet.

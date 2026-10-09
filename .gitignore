@@ -1,9 +1,30 @@
-# Public source allowlist. Private inputs and local artifacts stay untracked.
+# Public repository allowlist. Private QA and local configuration stay untracked.
 /*
 !/.gitignore
 !/README.md
 !/mac/
 !/tests/
+!/assembly/
+!/binaries/
+!/cpp/
+!/dmg/
+/assembly/*
+!/assembly/*.asm
+!/assembly/README.md
+/binaries/*
+!/binaries/AppxManifest.xml
+!/binaries/ScreenSketch.exe
+!/binaries/ScreenSketch.winmd
+!/binaries/ScreenSketchAppService.dll
+!/binaries/ScreenSketchAppService.winmd
+!/binaries/SnippingTool.exe
+!/binaries/README.md
+/cpp/*
+!/cpp/*.pseudocode.c
+!/cpp/README.md
+/dmg/*
+!/dmg/SnipForMac.dmg
+!/dmg/README.md
 /mac/*
 !/mac/Sources/
 !/mac/Tools/

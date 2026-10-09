@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<Package IgnorableNamespaces="uap mp rescap build" xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:build="http://schemas.microsoft.com/developer/appx/2015/build">
+  
+  <Identity Name="Microsoft.ScreenSketch" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" Version="10.2008.3001.0" ProcessorArchitecture="x64"/>
+  <mp:PhoneIdentity PhoneProductId="72ba66d3-9233-4202-a261-0d99de2942b4" PhonePublisherId="95d94207-0c7c-47ed-82db-d75c81153c35"/>
+  <Properties>
+    <DisplayName>ms-resource:AppStoreName</DisplayName>
+    <PublisherDisplayName>Microsoft Corporation</PublisherDisplayName>
+    <Logo>Assets\SnipSketchStoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.18362.0"/>
+    <PackageDependency Name="Microsoft.UI.Xaml.2.4" MinVersion="2.42005.18002.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"/>
+    <PackageDependency Name="Microsoft.VCLibs.140.00" MinVersion="14.0.30035.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"/>
+  </Dependencies>
+  <Resources>
+    <Resource Language="EN-US"/>
+    <Resource Language="EN-GB"/>
+    <Resource uap:Scale="200"/>
+    
+  </Resources>
+  <Applications>
+    <Application Id="App" Executable="ScreenSketch.exe" EntryPoint="ScreenSketch.App">
+      <uap:VisualElements DisplayName="ms-resource:AppName/Text" Square150x150Logo="Assets\SnipSketchMedTile.png" Square44x44Logo="Assets\SnipSketchAppList.png" Description="ms-resource:AppDescription" BackgroundColor="#0078D4">
+        <uap:DefaultTile ShortName="ms-resource:AppName/Text" Wide310x150Logo="Assets\SnipSketchWideTile.png" Square310x310Logo="Assets\SnipSketchLargeTile.png" Square71x71Logo="Assets\SnipSketchSmallTile.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo"/>
+            <uap:ShowOn Tile="wide310x150Logo"/>
+            <uap:ShowOn Tile="square310x310Logo"/>
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen uap5:Optional="true" Image="Assets\SnipSketchSplashScreen.png" BackgroundColor="#0078D4"/>
+      </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="ms-screensketch" DesiredView="default"/>
+        </uap:Extension>
+        <uap:Extension Category="windows.appService" EntryPoint="ScreenSketchAppService.ShowToastBackgroundTask">
+          <uap:AppService Name="Microsoft.ScreenSketch.ShowToastService"/>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="imagefile">
+            <uap:Logo>Assets\FileAssociation\FileAssociation.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              
+              <uap:FileType ContentType="image/bmp">.bmp</uap:FileType>
+              <uap:FileType ContentType="image/bmp">.dib</uap:FileType>
+              <uap:FileType ContentType="image/gif">.gif</uap:FileType>
+              <uap:FileType ContentType="image/x-icon">.ico</uap:FileType>
+              <uap:FileType ContentType="image/jpeg">.jfif</uap:FileType>
+              <uap:FileType ContentType="image/jpeg">.jpe</uap:FileType>
+              <uap:FileType ContentType="image/jpeg">.jpeg</uap:FileType>
+              <uap:FileType ContentType="image/jpeg">.jpg</uap:FileType>
+              <uap:FileType ContentType="image/png">.png</uap:FileType>
+              <uap:FileType ContentType="image/tiff">.tiff</uap:FileType>
+              <uap:FileType ContentType="image/tiff">.tif</uap:FileType>
+              <uap:FileType>.arw</uap:FileType>
+              <uap:FileType>.cr2</uap:FileType>
+              <uap:FileType>.crw</uap:FileType>
+              <uap:FileType>.erf</uap:FileType>
+              <uap:FileType>.kdc</uap:FileType>
+              <uap:FileType>.mrw</uap:FileType>
+              <uap:FileType>.nef</uap:FileType>
+              <uap:FileType>.nrw</uap:FileType>
+              <uap:FileType>.orf</uap:FileType>
+              <uap:FileType>.pef</uap:FileType>
+              <uap:FileType>.raw</uap:FileType>
+              <uap:FileType>.rw2</uap:FileType>
+              <uap:FileType>.rwl</uap:FileType>
+              <uap:FileType>.sr2</uap:FileType>
+              <uap:FileType>.srw</uap:FileType>
+              <uap:FileType>.jxr</uap:FileType>
+              <uap:FileType>.wdp</uap:FileType>
+              <uap:FileType>.dng</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap2:SupportedVerbs>
+              <uap3:Verb Id="ShellEdit">ms-resource:AnnotateWithScreenSketch</uap3:Verb>
+            </uap2:SupportedVerbs>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget Description="images">
+            <uap:SupportedFileTypes>
+              
+              <uap:FileType>.bmp</uap:FileType>
+              <uap:FileType>.dib</uap:FileType>
+              <uap:FileType>.gif</uap:FileType>
+              <uap:FileType>.ico</uap:FileType>
+              <uap:FileType>.jfif</uap:FileType>
+              <uap:FileType>.jpe</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.png</uap:FileType>
+              <uap:FileType>.tiff</uap:FileType>
+              <uap:FileType>.tif</uap:FileType>
+              <uap:FileType>.arw</uap:FileType>
+              <uap:FileType>.cr2</uap:FileType>
+              <uap:FileType>.crw</uap:FileType>
+              <uap:FileType>.erf</uap:FileType>
+              <uap:FileType>.kdc</uap:FileType>
+              <uap:FileType>.mrw</uap:FileType>
+              <uap:FileType>.nef</uap:FileType>
+              <uap:FileType>.nrw</uap:FileType>
+              <uap:FileType>.orf</uap:FileType>
+              <uap:FileType>.pef</uap:FileType>
+              <uap:FileType>.raw</uap:FileType>
+              <uap:FileType>.rw2</uap:FileType>
+              <uap:FileType>.rwl</uap:FileType>
+              <uap:FileType>.sr2</uap:FileType>
+              <uap:FileType>.srw</uap:FileType>
+              <uap:FileType>.jxr</uap:FileType>
+              <uap:FileType>.wdp</uap:FileType>
+              <uap:FileType>.dng</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DataFormat>StorageItems</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <uap:Capability Name="picturesLibrary"/>
+    <rescap:Capability Name="confirmAppClose"/>
+  </Capabilities>
+  <Extensions>
+    <Extension Category="windows.activatableClass.inProcessServer">
+      <InProcessServer>
+        <Path>ScreenSketchAppService.dll</Path>
+        <ActivatableClass ActivatableClassId="ScreenSketchAppService.ShowToastBackgroundTask" ThreadingModel="both"/>
+      </InProcessServer>
+    </Extension>
+  </Extensions>
+  <build:Metadata>
+    <build:Item Name="cl.exe" Version="19.29.30148.0 built by: cloudtest"/>
+    <build:Item Name="VisualStudio" Version="16.0"/>
+    <build:Item Name="OperatingSystem" Version="10.0.17763.1 (WinBuild.160101.0800)"/>
+    <build:Item Name="Microsoft.Build.AppxPackage.dll" Version="16.0.33328.57"/>
+    <build:Item Name="ProjectGUID" Value="{0be44482-4a79-4d0a-bd7f-3971f3dbbb4c}"/>
+    <build:Item Name="OptimizingToolset" Value="None"/>
+    <build:Item Name="TargetRuntime" Value="Native"/>
+    <build:Item Name="Microsoft.Windows.UI.Xaml.Build.Tasks.dll" Version="10.0.19041.685"/>
+    <build:Item Name="MakePri.exe" Version="10.0.19041.685 (WinBuild.160101.0800)"/>
+  </build:Metadata>
+</Package>

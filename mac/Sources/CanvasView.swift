@@ -37,11 +37,13 @@ final class CanvasScrollView: NSScrollView {
     func fitToWindow() {
         guard let docSize = canvas.intrinsicContentSize as CGSize?,
               docSize.width > 0, docSize.height > 0 else { return }
-        let viewSize = contentView.bounds.size
+        // Clip bounds are expressed in magnified document coordinates. The
+        // viewport frame stays constant when zoom changes, so fitting is stable.
+        let viewSize = contentView.frame.size
         let scaleX = viewSize.width / docSize.width
         let scaleY = viewSize.height / docSize.height
         let scale = min(scaleX, scaleY, 1.0)
-        magnification = scale
+        magnification = max(minMagnification, min(maxMagnification, scale))
         contentView.scroll(to: contentView.constrainBoundsRect(NSRect(origin: .zero, size: contentView.bounds.size)).origin)
         reflectScrolledClipView(contentView)
     }

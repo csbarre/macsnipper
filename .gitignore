@@ -14,7 +14,11 @@
 !/mac/Sources/*.swift
 /tests/*
 !/tests/model-regression/
+!/tests/export-regression/
 /tests/model-regression/*
 !/tests/model-regression/main.swift
 !/tests/model-regression/run.sh
+/tests/export-regression/*
+!/tests/export-regression/main.swift
+!/tests/export-regression/run.sh
 .DS_Store

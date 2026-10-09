@@ -1,7 +1,30 @@
 import AppKit
 import ScreenCaptureKit
 
-// Coordinates the capture flow: show overlay → selection → countdown → capture
+// Identifies a capture across asynchronous work. Finishing an old operation must
+// never close a newer capture or deliver its image to the editor.
+struct CaptureSessionState {
+    private(set) var identifier: UUID?
+    var isCapturing: Bool { identifier != nil }
+
+    mutating func begin() -> UUID? {
+        guard !isCapturing else { return nil }
+        let identifier = UUID()
+        self.identifier = identifier
+        return identifier
+    }
+
+    func isCurrent(_ identifier: UUID) -> Bool { self.identifier == identifier }
+
+    @discardableResult
+    mutating func finish(_ identifier: UUID) -> Bool {
+        guard isCurrent(identifier) else { return false }
+        self.identifier = nil
+        return true
+    }
+}
+
+// Coordinates permission, optional countdown, selection, and still-image capture.
 @available(macOS 14.0, *)
 final class OverlayController {
     static let shared = OverlayController()
@@ -13,64 +36,77 @@ final class OverlayController {
     private var captureDelay: CaptureDelay = .none
     private var completion: ((CaptureResult?) -> Void)?
     private var shareableContent: SCShareableContent?
+    private var session = CaptureSessionState()
+
+    var isCapturing: Bool { session.isCapturing }
 
     // MARK: - Begin Capture
 
     func beginCapture(mode: CaptureMode, delay: CaptureDelay, completion: @escaping (CaptureResult?) -> Void) {
-        guard self.completion == nil else { return }
+        guard let sessionID = session.begin() else { return }
         self.captureMode = mode
         self.captureDelay = delay
         self.completion = completion
 
         Task { @MainActor in
+            guard self.session.isCurrent(sessionID) else { return }
             // Check permission first
             guard PermissionManager.shared.requestScreenCapturePermission() else {
-                NotificationCenter.default.post(name: .capturePermissionDenied, object: nil)
-                self.completion = nil
-                completion(nil)
+                self.finishCapture(nil, notification: .capturePermissionDenied, sessionID: sessionID)
                 return
             }
 
             do {
                 let content = try await CaptureManager.shared.getShareableContent()
+                guard self.session.isCurrent(sessionID) else { return }
                 self.shareableContent = content
                 if delay.seconds > 0 {
                     self.countdown = CountdownController(seconds: delay.seconds, onComplete: { [weak self] in
-                        guard let self = self else { return }
+                        guard let self = self, self.session.isCurrent(sessionID) else { return }
                         self.countdown = nil
                         Task { @MainActor in
+                            guard self.session.isCurrent(sessionID) else { return }
                             do {
                                 let refreshed = try await CaptureManager.shared.getShareableContent()
+                                guard self.session.isCurrent(sessionID) else { return }
                                 self.shareableContent = refreshed
-                                self.showOverlay(content: refreshed, mode: mode)
-                            } catch { self.handleCancel() }
+                                self.showOverlay(content: refreshed, mode: mode, sessionID: sessionID)
+                            } catch { self.failCapture(error, sessionID: sessionID) }
                         }
-                    }, onCancel: { [weak self] in self?.handleCancel() })
+                    }, onCancel: { [weak self] in self?.handleCancel(sessionID: sessionID) })
                     self.countdown?.start()
-                } else { self.showOverlay(content: content, mode: mode) }
+                } else { self.showOverlay(content: content, mode: mode, sessionID: sessionID) }
             } catch {
-                self.failCapture(error)
+                self.failCapture(error, sessionID: sessionID)
             }
         }
     }
 
     // MARK: - Show Overlay
 
-    private func showOverlay(content: SCShareableContent, mode: CaptureMode) {
+    private func showOverlay(content: SCShareableContent, mode: CaptureMode, sessionID: UUID) {
+        guard session.isCurrent(sessionID) else { return }
+        let screens = NSScreen.screens
+        guard let firstScreen = screens.first else {
+            failCapture(CaptureError.noDisplaysFound, sessionID: sessionID)
+            return
+        }
         dismissOverlay()
+        NSApp.activate(ignoringOtherApps: true)
 
-        for screen in NSScreen.screens {
+        for screen in screens {
             let win = OverlayWindow(screen: screen, mode: mode, content: content)
             win.selectionHandler = { [weak self] selRect, freeformPoints, selectedWindow in
                 self?.handleSelection(
                     rect: selRect,
                     freeformPoints: freeformPoints,
                     selectedWindow: selectedWindow,
-                    onScreen: screen
+                    onScreen: screen,
+                    sessionID: sessionID
                 )
             }
             win.cancelHandler = { [weak self] in
-                self?.handleCancel()
+                self?.handleCancel(sessionID: sessionID)
             }
             win.makeKeyAndOrderFront(nil)
             overlayWindows.append(win)
@@ -78,36 +114,41 @@ final class OverlayController {
 
         // For fullscreen, immediately proceed without waiting for selection
         if mode == .fullscreen {
-            handleSelection(rect: nil, freeformPoints: nil, selectedWindow: nil, onScreen: NSScreen.main ?? NSScreen.screens[0])
+            handleSelection(rect: nil, freeformPoints: nil, selectedWindow: nil, onScreen: NSScreen.main ?? firstScreen, sessionID: sessionID)
         }
     }
 
     // MARK: - Handle Selection
 
-    private func handleSelection(rect: CGRect?, freeformPoints: [CGPoint]?, selectedWindow: SCWindow?, onScreen screen: NSScreen) {
+    private func handleSelection(rect: CGRect?, freeformPoints: [CGPoint]?, selectedWindow: SCWindow?, onScreen screen: NSScreen, sessionID: UUID) {
+        guard session.isCurrent(sessionID) else { return }
         dismissOverlay()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.performCapture(rect: rect, freeformPoints: freeformPoints, selectedWindow: selectedWindow, screen: screen)
+            self?.performCapture(rect: rect, freeformPoints: freeformPoints, selectedWindow: selectedWindow, screen: screen, sessionID: sessionID)
         }
     }
 
     // MARK: - Perform Capture
 
-    private func performCapture(rect: CGRect?, freeformPoints: [CGPoint]?, selectedWindow: SCWindow?, screen: NSScreen) {
+    private func performCapture(rect: CGRect?, freeformPoints: [CGPoint]?, selectedWindow: SCWindow?, screen: NSScreen, sessionID: UUID) {
+        guard session.isCurrent(sessionID) else { return }
         guard let content = shareableContent else {
-            completion?(nil)
+            failCapture(CaptureError.noDisplaysFound, sessionID: sessionID)
             return
         }
+        let mode = captureMode
 
         Task { @MainActor in
+            guard self.session.isCurrent(sessionID) else { return }
             do {
-                if captureMode == .fullscreen {
+                if mode == .fullscreen {
                     let result = try await CaptureManager.shared.captureDesktop(content: content)
-                    self.deliverResult(result)
+                    self.deliverResult(result, sessionID: sessionID)
                 } else if let window = selectedWindow {
                     // Window capture
                     let image = try await CaptureManager.shared.captureWindow(window)
+                    guard self.session.isCurrent(sessionID) else { return }
                     let result = CaptureResult(
                         image: image,
                         imageScale: CGFloat(window.frame.width > 0 ? Double(image.width) / Double(window.frame.width) : 1.0),
@@ -115,8 +156,8 @@ final class OverlayController {
                         selectionRect: nil,
                         freeformMask: nil
                     )
-                    self.deliverResult(result)
-                } else if captureMode == .fullscreen || captureMode == .rectangle || captureMode == .freeform {
+                    self.deliverResult(result, sessionID: sessionID)
+                } else if mode == .rectangle || mode == .freeform {
                     // Find the display for this screen
                     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
                     guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else {
@@ -128,11 +169,13 @@ final class OverlayController {
                     let sourceBounds: CGRect
                     if spansDisplays {
                         let desktop = try await CaptureManager.shared.captureDesktop(content: content)
+                        guard self.session.isCurrent(sessionID) else { return }
                         sourceImage = desktop.image
                         scale = desktop.imageScale
                         sourceBounds = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
                     } else {
                         sourceImage = try await CaptureManager.shared.captureDisplay(display, excludingWindows: CaptureManager.shared.ourWindows(from: content))
+                        guard self.session.isCurrent(sessionID) else { return }
                         scale = CGFloat(CaptureManager.shared.pixelScale(for: display))
                         sourceBounds = screen.frame
                     }
@@ -149,7 +192,7 @@ final class OverlayController {
                     }
 
                     var mask: FreeformMask? = nil
-                    if captureMode == .freeform, let pts = freeformPoints, !pts.isEmpty {
+                    if mode == .freeform, let pts = freeformPoints, !pts.isEmpty {
                         guard let selection = rect, selection.width > 1, selection.height > 1 else {
                             throw CaptureError.noImageProduced
                         }
@@ -171,43 +214,51 @@ final class OverlayController {
                         selectionRect: finalRect,
                         freeformMask: mask
                     )
-                    self.deliverResult(result)
+                    self.deliverResult(result, sessionID: sessionID)
+                } else {
+                    throw CaptureError.noImageProduced
                 }
             } catch let err as CaptureError where err == .permissionDenied {
-                NotificationCenter.default.post(name: .capturePermissionDenied, object: nil)
-                let callback = self.completion
-                self.completion = nil
-                callback?(nil)
+                self.finishCapture(nil, notification: .capturePermissionDenied, sessionID: sessionID)
             } catch {
-                self.failCapture(error)
+                self.failCapture(error, sessionID: sessionID)
             }
         }
     }
 
-    private func failCapture(_ error: Error) {
-        let callback = completion
-        completion = nil
-        callback?(nil)
+    private func failCapture(_ error: Error, sessionID: UUID) {
+        guard finishCapture(nil, notification: .captureCancelled, sessionID: sessionID) else { return }
         let alert = NSAlert()
         alert.messageText = "Capture failed"
         alert.informativeText = error.localizedDescription
         alert.runModal()
     }
 
-    private func deliverResult(_ result: CaptureResult) {
-        NotificationCenter.default.post(name: .captureCompleted, object: result)
-        completion?(result)
+    private func deliverResult(_ result: CaptureResult, sessionID: UUID) {
+        finishCapture(result, notification: .captureCompleted, sessionID: sessionID)
+    }
+
+    @discardableResult
+    private func finishCapture(_ result: CaptureResult?, notification: Notification.Name, sessionID: UUID) -> Bool {
+        guard session.finish(sessionID) else { return false }
+        let callback = completion
         completion = nil
+        shareableContent = nil
+        let previousCountdown = countdown
+        countdown = nil
+        dismissOverlay()
+        // Clear the session first so the countdown's cancellation callback is a
+        // no-op, and observers can safely begin another capture.
+        previousCountdown?.cancel()
+        NotificationCenter.default.post(name: notification, object: result)
+        callback?(result)
+        return true
     }
 
     // MARK: - Cancel
 
-    private func handleCancel() {
-        dismissOverlay()
-        countdown = nil
-        NotificationCenter.default.post(name: .captureCancelled, object: nil)
-        completion?(nil)
-        completion = nil
+    private func handleCancel(sessionID: UUID) {
+        finishCapture(nil, notification: .captureCancelled, sessionID: sessionID)
     }
 
     private func dismissOverlay() {
@@ -453,7 +504,7 @@ final class SelectionOverlayView: NSView {
             onSelection?(screenRect, nil, nil)
         case .freeform:
             freeformPoints.append(pt)
-            guard freeformPoints.count >= 3 else { isSelecting = false; needsDisplay = true; return }
+            guard FreeformMask(points: freeformPoints).hasEnclosedArea else { isSelecting = false; needsDisplay = true; return }
             let screenPts = freeformPoints.map {
                 CGPoint(x: $0.x + screen.frame.minX, y: $0.y + screen.frame.minY)
             }

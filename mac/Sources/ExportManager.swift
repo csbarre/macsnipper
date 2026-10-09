@@ -62,8 +62,20 @@ final class ExportManager {
     // Decode an image from data, returning (CGImage, backingScale)
     func decode(data: Data) -> (CGImage, CGFloat)? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+              var image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let orientation = props?[kCGImagePropertyOrientation] as? Int ?? 1
+        if orientation != 1 {
+            // CGImage has no orientation metadata. Normalize the source pixels
+            // before they enter the canvas or a new export would lose rotation.
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(image.width, image.height)
+            ]
+            guard let upright = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else { return nil }
+            image = upright
+        }
         let dpi = props?[kCGImagePropertyDPIWidth] as? CGFloat ?? 72
         let scale = max(1.0, dpi / 72.0)
         return (image, scale)
@@ -87,11 +99,10 @@ final class ExportManager {
     }
 
     func readImageFromClipboard(pasteboard pb: NSPasteboard = .general) -> CGImage? {
-        if let data = pb.data(forType: .png) {
-            return decode(data: data)?.0
-        }
-        if let data = pb.data(forType: .tiff) {
-            return decode(data: data)?.0
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pb.data(forType: type), let (image, _) = decode(data: data) {
+                return image
+            }
         }
         return nil
     }
@@ -145,6 +156,22 @@ final class ExportManager {
 
     // MARK: - Open Image
 
+    func loadImage(from url: URL) throws -> (CGImage, CGFloat) {
+        let data = try Data(contentsOf: url)
+        guard let decoded = decode(data: data) else {
+            throw NSError(domain: "MacsnipperImage", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "This file could not be decoded as an image."])
+        }
+        return decoded
+    }
+
+    func showOpenError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Could not open image"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
+
     func runOpenDialog(completion: @escaping (CGImage?, CGFloat, URL?) -> Void) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType.png, UTType.jpeg, UTType.tiff, UTType(filenameExtension: "gif")].compactMap { $0 }
@@ -154,10 +181,11 @@ final class ExportManager {
 
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { completion(nil, 1, nil); return }
-        guard let data = try? Data(contentsOf: url) else { completion(nil, 1, nil); return }
-        if let (image, scale) = decode(data: data) {
+        do {
+            let (image, scale) = try loadImage(from: url)
             completion(image, scale, url)
-        } else {
+        } catch {
+            showOpenError(error)
             completion(nil, 1, nil)
         }
     }

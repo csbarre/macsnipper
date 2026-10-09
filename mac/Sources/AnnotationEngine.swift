@@ -84,13 +84,22 @@ final class AnnotationStroke: NSObject {
         let radius = (eraserWidth + width) / 2
         let candidates = points.isEmpty ? (textOrigin.map { [$0] } ?? []) : points
         guard !candidates.isEmpty else { return false }
+        func segments(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
+            points.count == 1 ? [(points[0], points[0])] : Array(zip(points, points.dropFirst()))
+        }
         if tool == .text, let origin = textOrigin, let text = textContent {
             let size = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: max(width * 3, 12))])
             let bounds = CGRect(origin: origin, size: size).insetBy(dx: -eraserWidth / 2, dy: -eraserWidth / 2)
-            if eraserPoints.contains(where: { bounds.contains($0) }) { return true }
-        }
-        func segments(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
-            points.count == 1 ? [(points[0], points[0])] : Array(zip(points, points.dropFirst()))
+            let corners = [CGPoint(x: bounds.minX, y: bounds.minY), CGPoint(x: bounds.maxX, y: bounds.minY),
+                           CGPoint(x: bounds.maxX, y: bounds.maxY), CGPoint(x: bounds.minX, y: bounds.maxY)]
+            let edges = Array(zip(corners, Array(corners.dropFirst()) + [corners[0]]))
+            // Fast drags can have both sampled endpoints outside the text. Test
+            // every intervening segment against the whole annotation bounds.
+            return segments(eraserPoints).contains { a, b in
+                bounds.contains(a) || bounds.contains(b) || edges.contains { c, d in
+                    Self.segmentDistance(a, b, c, d) <= 0.000001
+                }
+            }
         }
         for (a, b) in segments(candidates) {
             for (c, d) in segments(eraserPoints) {
@@ -157,17 +166,17 @@ final class AnnotationStroke: NSObject {
     }
 
     private func drawText(_ text: String, at origin: CGPoint, in context: CGContext, scale: CGFloat) {
-        let fontSize = width * scale * 3
+        let fontSize = max(width * 3, 12)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: max(fontSize, 12)),
+            .font: NSFont.systemFont(ofSize: fontSize),
             .foregroundColor: color.withAlphaComponent(opacity)
         ]
         let str = NSAttributedString(string: text, attributes: attrs)
         let line = CTLineCreateWithAttributedString(str)
         // The caller uses top-left image coordinates. Flip glyphs back upright.
         context.translateBy(x: origin.x * scale, y: origin.y * scale)
-        context.scaleBy(x: 1, y: -1)
-        context.textPosition = CGPoint(x: 0, y: -max(fontSize, 12))
+        context.scaleBy(x: scale, y: -scale)
+        context.textPosition = CGPoint(x: 0, y: -fontSize)
         CTLineDraw(line, context)
     }
 }
@@ -188,8 +197,20 @@ struct FreeformMask {
         return path
     }
 
+    var hasEnclosedArea: Bool {
+        guard points.count >= 3, let first = points.first,
+              let farthest = points.max(by: { hypot($0.x - first.x, $0.y - first.y) < hypot($1.x - first.x, $1.y - first.y) }) else { return false }
+        let dx = farthest.x - first.x, dy = farthest.y - first.y
+        let length = hypot(dx, dy)
+        guard length > 0 else { return false }
+        // A line (even with many sampled points) cannot enclose a snip. Unlike
+        // signed polygon area this also accepts self-crossing freeform outlines.
+        return points.contains { abs(dx * ($0.y - first.y) - dy * ($0.x - first.x)) / length > 0.5 }
+    }
+
     func applyMask(to image: CGImage, in bounds: CGRect) -> CGImage? {
         guard !points.isEmpty else { return image }
+        guard hasEnclosedArea else { return nil }
         guard bounds.width > 0, bounds.height > 0 else { return nil }
         let width = image.width
         let height = image.height

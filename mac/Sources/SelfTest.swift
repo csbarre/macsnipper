@@ -21,7 +21,12 @@ final class SelfTest {
         controller.window?.contentView?.layoutSubtreeIfNeeded()
         let frame = controller.window?.frame ?? .zero
         assert(frame.width >= 720 && frame.height >= 520, "Editor initial window size", details: "\(frame)")
+        assert(controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "saveButton" })?.isEnabled == false, "Save starts disabled without an image")
+        assert(!FreeformMask(points: [CGPoint(x: 0, y: 0), CGPoint(x: 20, y: 20), CGPoint(x: 40, y: 40)]).hasEnclosedArea, "Straight freeform drag is rejected")
+        assert(FreeformMask(points: [CGPoint(x: 0, y: 0), CGPoint(x: 40, y: 0), CGPoint(x: 20, y: 40)]).hasEnclosedArea, "Closed freeform shape is accepted")
         testToolbarReactivation()
+        testFitAndGuides()
+        testCaptureSessionsAndPaste()
         testGeometry()
         testRetinaSizing()
         testFlippedOrientation()
@@ -61,6 +66,60 @@ final class SelfTest {
             let save = NSMenuItem(title: "Save", action: #selector(EditorWindowController.saveAs(_:)), keyEquivalent: "")
             assert(editor.validateUserInterfaceItem(save), "Capture cycle \(cycle): Save validates with image")
         }
+    }
+
+    private func testFitAndGuides() {
+        guard let image = makeTestImage(width: 2000, height: 1000, color: .white) else { return }
+        let document = ImageDocument(image: image)
+        let scroll = CanvasScrollView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        scroll.canvas.document = document
+        scroll.layoutSubtreeIfNeeded()
+        scroll.magnification = 2
+        scroll.fitToWindow()
+        let fitted = scroll.magnification
+        assert(fitted <= 0.4 && fitted > 0.3, "Fit uses viewport dimensions after zooming in")
+        scroll.magnification = 0.2
+        scroll.fitToWindow()
+        assertNear(scroll.magnification, fitted, tolerance: 0.01, "Fit is independent of previous zoom")
+        scroll.fitToWindow()
+        assertNear(scroll.magnification, fitted, tolerance: 0.01, "Repeated Fit is stable")
+        let guide = scroll.canvas.rulerGuide
+        guide.rulerCenter = CGPoint(x: 100, y: 100)
+        guide.mode = .ruler
+        let projected = guide.constrainToRuler(CGPoint(x: 150, y: 180))
+        assertNear(projected.y, 100, "Ruler constrains drawing to its line")
+        guide.mode = .protractor
+        guide.protractorCenter = CGPoint(x: 100, y: 100)
+        let circular = guide.constrainToRuler(CGPoint(x: 100, y: 200))
+        assertNear(circular.y, 180, "Protractor constrains drawing to its circle")
+    }
+
+    private func testCaptureSessionsAndPaste() {
+        var session = CaptureSessionState()
+        assert(!session.isCapturing, "Capture initially idle")
+        let first = session.begin()!
+        assert(session.isCapturing && session.isCurrent(first), "Capture begins with current session")
+        assert(session.begin() == nil, "Concurrent capture is rejected")
+        assert(!session.finish(UUID()) && session.isCurrent(first), "Unrelated completion preserves current capture")
+        assert(session.finish(first) && !session.isCapturing, "Completion clears capture state")
+        assert(!session.finish(first), "Duplicate completion is ignored")
+        let second = session.begin()!
+        assert(first != second && session.isCurrent(second), "New capture has a distinct session")
+        assert(!session.finish(first) && session.isCurrent(second), "Stale capture cannot finish newer capture")
+        assert(session.finish(second) && !session.isCapturing, "Capture can complete again")
+
+        guard let original = makeTestImage(width: 100, height: 80, color: .white),
+              let pasted = makeTestImage(width: 60, height: 40, color: .red) else { return }
+        let document = ImageDocument(image: original)
+        document.commitStroke(AnnotationStroke(tool: .pen, color: .blue, width: 3, points: [CGPoint(x: 10, y: 10)]))
+        document.markSaved(at: URL(fileURLWithPath: "/tmp/macsnipper-undo-fixture.png"))
+        EditorWindowController.shared.loadDocument(document)
+        EditorWindowController.shared.replaceWithPastedImage(pasted)
+        assert(document.originalImage.width == 60 && document.strokes.isEmpty && document.isDirty, "Paste replaces image and marks edits")
+        document.undo()
+        assert(document.originalImage.width == 100 && document.strokes.count == 1 && !document.isDirty, "Undo paste restores saved image and annotations")
+        document.redo()
+        assert(document.originalImage.width == 60 && document.strokes.isEmpty && document.isDirty, "Redo paste restores pasted image")
     }
 
     // MARK: - Assert helpers

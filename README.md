@@ -24,6 +24,7 @@ The build runs the included self-tests. Grant Screen Recording permission in Sys
 
 ```bash
 bash tests/model-regression/run.sh
+bash tests/export-regression/run.sh
 bash mac/package.sh --no-build
 ```
 
@@ -31,7 +32,9 @@ Packaging creates `dmg/SnipForMac.dmg`. See [the app guide](mac/README.md) for u
 
 ## Validation
 
-The current implementation passed 60 built-in checks and 10 independent model checks. Manual testing verified consecutive rectangle captures, toolbar recovery, annotation, image opening, saving, crop, and undo/redo on Apple silicon. Other capture modes and all display configurations have not received complete manual validation.
+The current implementation passed 80 built-in checks, 10 independent model checks, and 52 export regression checks. These cover image orientation, annotation rendering, eraser geometry, clipboard fallback, undo/redo, crop, stable zoom fitting, and capture session ownership.
+
+Native UI testing on Apple silicon verified repeated rectangle captures, window capture, full capture across two displays, delay completion/cancellation, toolbar recovery, annotation and guides, image opening, corrupt-image errors, saving, crop, undo/redo, and print-to-PDF. The Share picker was exercised without transmitting a capture. Physical shortcut activation, a curved freeform gesture, native color-panel selection, and dragging a selection across display boundaries still need manual acceptance; automated geometry tests do not replace those checks. Unusual color profiles and all possible display configurations are not claimed as validated.
 
 ## Repository scope
 

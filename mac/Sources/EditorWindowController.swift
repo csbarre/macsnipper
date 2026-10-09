@@ -52,6 +52,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         setupToolbar()
         setupMenu()
         setupNotifications()
+        updateToolbarState()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -202,7 +203,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     // MARK: - Document loading
 
     func openFile(_ url: URL) {
-        guard let data = try? Data(contentsOf: url), let (image, scale) = ExportManager.shared.decode(data: data) else { return }
+        let image: CGImage, scale: CGFloat
+        do { (image, scale) = try ExportManager.shared.loadImage(from: url) }
+        catch { ExportManager.shared.showOpenError(error); return }
         confirmReplacement { [weak self] in
             let doc = ImageDocument(image: image, scale: scale)
             doc.sourceURL = url
@@ -234,8 +237,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     private func updateStatusBar() {
         guard let doc = imageDocument else { statusLabel.stringValue = "No image"; return }
-        let s = doc.croppedLogicalSize
-        statusLabel.stringValue = "\(Int(s.width)) × \(Int(s.height)) px  @\(doc.imageScale)x"
+        let image = doc.croppedImage
+        statusLabel.stringValue = "\(image.width) × \(image.height) px  @\(doc.imageScale)x"
     }
 
     private func updateToolbarState() {
@@ -274,7 +277,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     // MARK: - Actions
 
     @objc func newCapture(_ sender: Any?) {
+        guard window?.attachedSheet == nil, NSApp.modalWindow == nil,
+              !OverlayController.shared.isCapturing else { return }
         if let doc = imageDocument, doc.isDirty, Settings.shared.warnOnUnsavedChanges {
+            showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.messageText = "Save changes before capturing?"
             alert.informativeText = "Your current snip has unsaved changes."
@@ -301,11 +308,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private func startCapture() {
         // Preserve current imageDocument in case capture is cancelled
         pendingDocument = imageDocument
-        window?.orderOut(nil)
         let mode = captureMode()
         let delay = captureDelay()
-
-        if #available(macOS 14.0, *) {
+        // Allow AppKit to finish tearing down the unsaved-change sheet before
+        // hiding its parent window and starting selection.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !OverlayController.shared.isCapturing else { return }
+            self.window?.orderOut(nil)
             OverlayController.shared.beginCapture(mode: mode, delay: delay) { [weak self] result in
                 if result == nil { self?.showWindow(nil); NSApp.activate(ignoringOtherApps: true) }
             }
@@ -365,15 +374,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func pasteImage(_ sender: Any?) {
         guard let image = ExportManager.shared.readImageFromClipboard() else { return }
         confirmReplacement { [weak self] in
-            let doc = ImageDocument(image: image, scale: 1)
+            self?.replaceWithPastedImage(image)
+        }
+    }
+
+    func replaceWithPastedImage(_ image: CGImage) {
+        if let doc = imageDocument {
+            doc.replaceImage(image, scale: 1)
+            loadDocument(doc)
+        } else {
+            let doc = ImageDocument(image: image)
             doc.markUnsaved()
-            self?.loadDocument(doc)
+            loadDocument(doc)
         }
     }
 
     func confirmReplacement(_ action: @escaping () -> Void) {
         guard let doc = imageDocument, doc.isDirty, Settings.shared.warnOnUnsavedChanges,
               let window = window else { action(); return }
+        showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Save your current snip?"
         alert.addButton(withTitle: "Save")
@@ -449,7 +469,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
             canvasView.isCroppingActive = false
             canvasView.cropSelectionRect = nil
         } else {
-            canvasView.currentTool = .crop
             canvasView.isCroppingActive = true
         }
         canvasView.needsDisplay = true

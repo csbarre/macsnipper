@@ -8,3 +8,5 @@ This folder contains the Microsoft Windows files used as static-analysis referen
 - `AppxManifest.xml`: the ScreenSketch package manifest.
 
 The files retain their original bytes and Microsoft ownership. Ghidra exports are in `assembly` and `cpp`. The native Mac app is built from the separate Swift implementation in `mac/Sources`.
+
+The matching `0` and `1` text representations of the three program files are in [`binary/`](../binary/README.md).

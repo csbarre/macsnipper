@@ -1,0 +1,36 @@
+{
+  "format": {
+    "bits_per_byte": 8,
+    "bytes_per_line": 16,
+    "bit_order": "MSB first",
+    "byte_order": "unchanged",
+    "separator": "space",
+    "line_ending": "LF"
+  },
+  "files": [
+    {
+      "source": "binaries/ScreenSketch.exe",
+      "text": "binary/ScreenSketch.bits.txt",
+      "source_bytes": 2871296,
+      "bit_count": 22970368,
+      "source_sha256": "0c9ea23827d15ce7bc267c7ab8c5768eab57fed200cef69bdca89499ae8aa93c",
+      "text_sha256": "4adda4349c1d3d169c4cca020120d3cde33c045e715e591d5acd51008695bf6c"
+    },
+    {
+      "source": "binaries/ScreenSketchAppService.dll",
+      "text": "binary/ScreenSketchAppService.bits.txt",
+      "source_bytes": 127488,
+      "bit_count": 1019904,
+      "source_sha256": "c8fcc928e329d023f0f7f9a9ae2771ab44a8d3155ef39695b40127eaa9ed0cc4",
+      "text_sha256": "345912df30248fe53835d1d9caee5f5a8a093e12938b9d6d91b58f83623b7f6b"
+    },
+    {
+      "source": "binaries/SnippingTool.exe",
+      "text": "binary/SnippingTool.bits.txt",
+      "source_bytes": 3371520,
+      "bit_count": 26972160,
+      "source_sha256": "23aff8e637c0c70c9e7ecb6008ee74ad68f65b29b7a5db9628045b65a7d5f41c",
+      "text_sha256": "d71eb92cccf7a1f00638f48d9ae8006bdab987367e4e5ea6f9cf1acaaf9cd747"
+    }
+  ]
+}

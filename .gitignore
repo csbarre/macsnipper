@@ -6,6 +6,7 @@
 !/tests/
 !/assembly/
 !/binaries/
+!/binary/
 !/cpp/
 !/dmg/
 /assembly/*
@@ -23,6 +24,11 @@
 !/binaries/ScreenSketchAppService.winmd
 !/binaries/SnippingTool.exe
 !/binaries/README.md
+/binary/*
+!/binary/*.bits.txt
+!/binary/README.md
+!/binary/export_bits.py
+!/binary/manifest.json
 /cpp/*
 !/cpp/*.pseudocode.c
 !/cpp/README.md

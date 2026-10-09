@@ -43,6 +43,7 @@ This repository contains the native Mac implementation, synthetic tests, Windows
 - `mac/` contains the native Swift implementation and build tools.
 - `tests/` contains synthetic regression checks and performance benchmarks.
 - `binaries/` contains the Microsoft Windows reference executables, WinRT metadata, and package manifest.
+- `binary/` contains readable `0` and `1` text representations of the three Windows reference programs, preserving every original byte.
 - `assembly/` contains disassembly exports from the Windows executables.
 - `cpp/` contains Ghidra C-like pseudocode, which is analysis output rather than recovered original C++ or buildable Mac source.
 - `dmg/SnipForMac.dmg` contains the packaged native Mac app built from the current Mac source.

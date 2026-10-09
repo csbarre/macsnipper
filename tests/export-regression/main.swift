@@ -125,5 +125,107 @@ do { _ = try ExportManager.shared.loadImage(from: broken); check(false, "Invalid
 catch { check(true, "Invalid image reports failure") }
 do { _ = try ExportManager.shared.loadImage(from: directory.appendingPathComponent("missing.png")); check(false, "Missing image reports failure") }
 catch { check(true, "Missing image reports failure") }
+
+// Pump the main run loop, rather than blocking it with a semaphore: file workers
+// deliver UI callbacks on the main queue.
+func waitFor<T>(_ start: (@escaping (T) -> Void) -> Void) -> T? {
+    var value: T?
+    start { value = $0 }
+    let deadline = Date().addingTimeInterval(10)
+    while value == nil && Date() < deadline {
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    return value
+}
+let asyncDoc = ImageDocument(image: solid(width: 120, height: 80))
+let snapshot = asyncDoc.snapshotForExport()
+let asyncPath = directory.appendingPathComponent("async.png")
+var callbackOnMain = false
+let writeResult: Result<Void, Error>? = waitFor { done in
+    ExportManager.shared.write(snapshot: snapshot, to: asyncPath) { result in
+        callbackOnMain = Thread.isMainThread
+        done(result)
+    }
+}
+check((try? writeResult?.get()) != nil, "Async snapshot write completes successfully")
+check(callbackOnMain, "Async write callback runs on main thread")
+let loaded: Result<(CGImage, CGFloat), Error>? = waitFor { done in
+    ExportManager.shared.loadImageAsync(from: asyncPath, completion: done)
+}
+check((try? loaded?.get().0.width) == 120, "Async load decodes saved dimensions")
+let badLoad: Result<(CGImage, CGFloat), Error>? = waitFor { done in
+    ExportManager.shared.loadImageAsync(from: broken, completion: done)
+}
+if case .failure? = badLoad { check(true, "Async corrupt-image load reports an error") }
+else { check(false, "Async corrupt-image load reports an error") }
+let badWrite: Result<Void, Error>? = waitFor { done in
+    ExportManager.shared.write(snapshot: snapshot, to: directory.appendingPathComponent("absent/output.png"), completion: done)
+}
+if case .failure? = badWrite { check(true, "Async write reports filesystem failure") }
+else { check(false, "Async write reports filesystem failure") }
+
+let savedOldRevision = directory.appendingPathComponent("saved-revision.png")
+let saveDuringEdit: Bool? = waitFor { done in
+    ExportManager.shared.save(document: asyncDoc, to: savedOldRevision, completion: done)
+    asyncDoc.commitStroke(AnnotationStroke(tool: .pen, color: .red, width: 3,
+        points: [CGPoint(x: 10, y: 10), CGPoint(x: 80, y: 10)]))
+}
+check(saveDuringEdit == false && asyncDoc.isDirty, "Async save does not mark subsequent edits saved or approve replacement")
+let earlierSaved = try! ExportManager.shared.loadImage(from: savedOldRevision).0
+let savedColor = NSBitmapImageRep(cgImage: earlierSaved).colorAt(x: 40, y: 10)!.usingColorSpace(.deviceRGB)!
+check(savedColor.greenComponent > 0.9, "Export snapshot excludes edits made after Save began")
+asyncDoc.undo()
+check(!asyncDoc.isDirty, "Undo to the revision written asynchronously restores clean state")
+let savedUnchanged: Bool? = waitFor { done in
+    ExportManager.shared.save(document: asyncDoc, to: directory.appendingPathComponent("unchanged.png"), completion: done)
+}
+check(savedUnchanged == true && !asyncDoc.isDirty, "Async unchanged save succeeds and marks the matching revision clean")
+
+// Exercise the worker's annotated rendering path, including local Core Text
+// layout. Mutating the input after snapshotting must not affect the export.
+let annotatedDoc = ImageDocument(image: solid(width: 200, height: 100))
+annotatedDoc.commitStroke(text)
+let annotatedSnapshot = annotatedDoc.snapshotForExport()
+let synchronousImage = annotatedSnapshot.render()!
+annotatedDoc.commitStroke(AnnotationStroke(tool: .highlighter, color: .blue, width: 20,
+    points: [CGPoint(x: 10, y: 65), CGPoint(x: 170, y: 65)]))
+for format in ExportFormat.allCases {
+    let annotatedPath = directory.appendingPathComponent("annotated.\(format.fileExtension)")
+    let result: Result<Void, Error>? = waitFor { done in
+        ExportManager.shared.write(snapshot: annotatedSnapshot, to: annotatedPath, completion: done)
+    }
+    check((try? result?.get()) != nil, "Background text export succeeds as \(format.displayName)")
+    let output = try! ExportManager.shared.loadImage(from: annotatedPath).0
+    // Compare to the same codec so JPEG's lossy edge pixels cannot masquerade
+    // as a threading or glyph-layout difference.
+    let reference = ExportManager.shared.decode(data: ExportManager.shared.encode(image: synchronousImage, format: format)!)!.0
+    let synchronousInk = inkBounds(reference)
+    let exportedInk = inkBounds(output)
+    check(abs(exportedInk.minX - synchronousInk.minX) <= 1 &&
+        abs(exportedInk.minY - synchronousInk.minY) <= 1 &&
+        abs(exportedInk.width - synchronousInk.width) <= 2 &&
+        abs(exportedInk.height - synchronousInk.height) <= 2,
+        "Background \(format.displayName) text retains synchronous glyph size and origin")
+}
+let previousAppearance = app.appearance
+app.appearance = NSAppearance(named: .darkAqua)
+let adaptive = NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .red : .blue
+}
+let appearanceDoc = ImageDocument(image: solid(width: 80, height: 40))
+appearanceDoc.commitStroke(AnnotationStroke(tool: .pen, color: adaptive, width: 10,
+    points: [CGPoint(x: 10, y: 20), CGPoint(x: 70, y: 20)]))
+let appearanceSnapshot = appearanceDoc.snapshotForExport()
+app.appearance = NSAppearance(named: .aqua)
+let appearancePath = directory.appendingPathComponent("appearance.png")
+let appearanceResult: Result<Void, Error>? = waitFor { done in
+    ExportManager.shared.write(snapshot: appearanceSnapshot, to: appearancePath, completion: done)
+}
+check((try? appearanceResult?.get()) != nil, "Adaptive-color snapshot exports after the app appearance changes")
+let appearanceOutput = try! ExportManager.shared.loadImage(from: appearancePath).0
+let frozenColor = NSBitmapImageRep(cgImage: appearanceOutput).colorAt(x: 40, y: 20)!.usingColorSpace(.deviceRGB)!
+check(frozenColor.redComponent > 0.9 && frozenColor.blueComponent < 0.1,
+    "Background export retains the editor color resolved when Save began")
+app.appearance = previousAppearance
 print("\(checks - failures.count)/\(checks) export regression checks passed")
 if !failures.isEmpty { exit(1) }

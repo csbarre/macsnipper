@@ -29,13 +29,34 @@ The DMG is placed in `dmg/SnipForMac.dmg`.
 
 ## Self-Test
 
-The binary includes a headless test suite that verifies geometry, encoding, annotation rendering, undo/redo, and clipboard - without requiring screen capture permission:
+The binary includes 86 headless self-tests for geometry, encoding, annotation rendering, undo/redo, toolbar state, and clipboard. They run without screen capture permission:
 
 ```bash
 mac/build/Snip.app/Contents/MacOS/Snip --self-test
 ```
 
 Exit code 0 = all tests pass.
+
+Two additional synthetic regression suites can be run from the repository root:
+
+```bash
+bash tests/model-regression/run.sh
+bash tests/export-regression/run.sh
+```
+
+The model suite has 28 checks and the export suite has 71. Together with the built-in tests, the repository has 185 automated checks. They do not replace native UI acceptance.
+
+## Performance Benchmark
+
+Run a synthetic benchmark from the repository root. The default measures canvas drawing; the other modes measure history operations and a no-hit erase pass:
+
+```bash
+bash tests/performance/run.sh
+bash tests/performance/run.sh history
+bash tests/performance/run.sh erase
+```
+
+The benchmark prints elapsed times and checks basic resulting state. It uses generated images and annotations and has no timing pass threshold.
 
 ## Usage
 
@@ -62,7 +83,9 @@ Exit code 0 = all tests pass.
 
 **Crop** - click Crop in the toolbar, drag to select the crop region, then click Crop again (or press ⌘K) to apply. Undoable.
 
-**Undo/Redo** - full undo history for all annotation and crop operations (⌘Z / ⇧⌘Z).
+**Undo/Redo** - full undo history for annotation, erase, paste, and crop operations (⌘Z / ⇧⌘Z), preserving operation order.
+
+**Performance and document behavior** - image decoding, rendering, and atomic saves run on a serial background worker. A save uses a document revision snapshot, so edits made while saving remain marked unsaved. Cropping caches pixel data, and canvas redraws use dirty regions over a checkerboard transparency background. Capture mode and delay preferences persist between launches.
 
 **Export**:
 - Copy (⌘C) - copies as both PNG and TIFF to the clipboard
@@ -81,30 +104,32 @@ Exit code 0 = all tests pass.
 ## Architecture
 
 ```
-mac/Sources/
-  main.swift                   # Entry point, --self-test dispatch
-  AppDelegate.swift            # App lifecycle, menu setup, hotkey wiring
-  Settings.swift               # UserDefaults-backed preferences
-  HotkeyManager.swift          # Carbon RegisterEventHotKey (⌘⇧2, no Accessibility needed)
-  PermissionManager.swift      # Screen capture permission + Settings link
-  ImageDocument.swift          # Document model: image, strokes, crop, undo/redo
-  AnnotationEngine.swift       # Stroke types, rendering, eraser hit-test, freeform mask
-  CaptureManager.swift         # SCScreenshotManager + SCShareableContent (macOS 14+)
-  OverlayController.swift      # Full-screen selection overlays for all screens
-  CountdownController.swift    # Countdown timer overlay with Escape cancellation
-  EditorWindowController.swift # Main editor window, toolbar, all actions
-  CanvasView.swift             # NSScrollView + CanvasView: image, annotations, crop overlay
-  RulerGuideOverlay.swift      # Movable ruler and protractor guide
-  ExportManager.swift          # Clipboard, Save As, Print, Share, Open, encode/decode
-  IconGenerator.swift          # AppKit vector scissors icon (no external assets)
-  SelfTest.swift               # Headless test suite (geometry, encoding, undo, clipboard)
+mac/
+  Sources/
+    main.swift                   # Entry point, --self-test dispatch
+    AppDelegate.swift            # App lifecycle, menu setup, hotkey wiring
+    Settings.swift               # UserDefaults-backed preferences
+    HotkeyManager.swift          # Carbon RegisterEventHotKey (⌘⇧2, no Accessibility needed)
+    PermissionManager.swift      # Screen capture permission + Settings link
+    ImageDocument.swift          # Document model: image, strokes, crop, undo/redo
+    AnnotationEngine.swift       # Stroke types, rendering, eraser hit-test, freeform mask
+    CaptureManager.swift         # SCScreenshotManager + SCShareableContent (macOS 14+)
+    OverlayController.swift      # Full-screen selection overlays for all screens
+    CountdownController.swift    # Countdown timer overlay with Escape cancellation
+    EditorWindowController.swift # Main editor window, toolbar, all actions
+    CanvasView.swift             # NSScrollView + CanvasView: image, annotations, crop overlay
+    RulerGuideOverlay.swift      # Movable ruler and protractor guide
+    ExportManager.swift          # Clipboard, Save As, Print, Share, Open, encode/decode
+    SelfTest.swift               # Headless test suite (geometry, encoding, undo, clipboard)
+  Tools/
+    IconGenerator.swift          # Build-time AppKit vector scissors icon (no external assets)
 ```
 
 ## Audio and Video
 
 Snip captures still images only. No audio or video recording is performed.
 
-`SCStreamConfiguration.capturesAudio` is explicitly set to `false` in both capture paths (`captureDisplay` and `captureWindow`). Optional audio settings (`capturesAudio`, `sampleRate`, `channelCount`) are retained as commented-out lines in `CaptureManager.swift` for reference but are not active.
+`SCStreamConfiguration.capturesAudio` is explicitly set to `false` in both capture paths (`captureDisplay` and `captureWindow`). Optional audio settings (`capturesAudio`, `sampleRate`, `channelCount`) remain as comments in `CaptureManager.swift` and are inactive.
 
 ## Code Signing
 

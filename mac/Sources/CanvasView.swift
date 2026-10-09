@@ -81,9 +81,6 @@ final class CanvasView: NSView {
     private var activeStroke: AnnotationStroke?
     private var eraserPath: NSBezierPath?
 
-    // Zoom (managed by scroll view, but we track it)
-    var zoomLevel: CGFloat = 1.0
-
     override var intrinsicContentSize: NSSize {
         document.map { NSSize(width: $0.croppedLogicalSize.width, height: $0.croppedLogicalSize.height) } ?? NSSize(width: 400, height: 300)
     }
@@ -126,37 +123,41 @@ final class CanvasView: NSView {
         let imageRect = CGRect(origin: .zero, size: logicalSize)
 
         // Draw checkerboard for transparent areas
-        drawCheckerboard(ctx, rect: imageRect)
+        drawCheckerboard(ctx, rect: imageRect, dirtyRect: dirtyRect)
 
         // Draw the image
         NSImage(cgImage: base, size: logicalSize).draw(in: imageRect, from: .zero,
             operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
 
-        // Draw annotations
-        let cropOrigin = CGPoint.zero
+        // Draw annotations and eraser preview clipped to image bounds
+        ctx.saveGState()
+        ctx.clip(to: imageRect)
+
         for stroke in doc.strokes {
             if stroke.tool == .highlighter {
                 ctx.saveGState()
                 ctx.setBlendMode(.multiply)
-                drawStroke(stroke, ctx: ctx, offsetX: -cropOrigin.x, offsetY: -cropOrigin.y)
+                stroke.draw(in: ctx)
                 ctx.restoreGState()
             } else {
-                drawStroke(stroke, ctx: ctx, offsetX: -cropOrigin.x, offsetY: -cropOrigin.y)
+                stroke.draw(in: ctx)
             }
         }
 
-        // Draw active stroke
         if let active = activeStroke {
-            drawStroke(active, ctx: ctx, offsetX: 0, offsetY: 0)
+            active.draw(in: ctx)
         }
 
-        // Draw eraser path
         if let ep = eraserPath {
+            ctx.saveGState()
             ctx.setStrokeColor(NSColor.systemGray.withAlphaComponent(0.6).cgColor)
             ctx.setLineWidth(currentWidth)
             ctx.setLineDash(phase: 0, lengths: [4, 4])
             ep.stroke()
+            ctx.restoreGState()
         }
+
+        ctx.restoreGState()
 
         // Draw crop selection
         if isCroppingActive, let cropRect = cropSelectionRect {
@@ -164,23 +165,25 @@ final class CanvasView: NSView {
         }
     }
 
-    private func drawCheckerboard(_ ctx: CGContext, rect: CGRect) {
+    private func drawCheckerboard(_ ctx: CGContext, rect: CGRect, dirtyRect: CGRect) {
         let size: CGFloat = 8
-        for row in 0...Int(rect.height / size) {
-            for col in 0...Int(rect.width / size) {
+        let visible = rect.intersection(dirtyRect)
+        guard !visible.isNull, !visible.isEmpty else { return }
+        let firstRow = max(0, Int(floor((visible.minY - rect.minY) / size)))
+        let lastRow = Int(ceil((visible.maxY - rect.minY) / size)) - 1
+        let firstCol = max(0, Int(floor((visible.minX - rect.minX) / size)))
+        let lastCol = Int(ceil((visible.maxX - rect.minX) / size)) - 1
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        ctx.clip(to: visible)
+        for row in firstRow...lastRow {
+            for col in firstCol...lastCol {
                 let r = CGRect(x: rect.minX + CGFloat(col) * size, y: rect.minY + CGFloat(row) * size, width: size, height: size)
                 let isLight = (row + col) % 2 == 0
                 ctx.setFillColor((isLight ? NSColor.white : NSColor(white: 0.85, alpha: 1)).cgColor)
                 ctx.fill(r)
             }
         }
-    }
-
-    private func drawStroke(_ stroke: AnnotationStroke, ctx: CGContext, offsetX: CGFloat, offsetY: CGFloat) {
-        let adjusted = stroke.copyStroke()
-        adjusted.points = adjusted.points.map { CGPoint(x: $0.x + offsetX, y: $0.y + offsetY) }
-        if let origin = adjusted.textOrigin { adjusted.textOrigin = CGPoint(x: origin.x + offsetX, y: origin.y + offsetY) }
-        adjusted.draw(in: ctx)
     }
 
     private func drawCropOverlay(_ ctx: CGContext, rect: CGRect, imageBounds: CGRect) {
@@ -231,7 +234,6 @@ final class CanvasView: NSView {
 
         guard let doc = document else { return }
         guard bounds.contains(pt) else { return }
-        let cropOffset = CGPoint.zero
         if currentTool == .text {
             let alert = NSAlert()
             alert.messageText = "Add text"
@@ -265,8 +267,7 @@ final class CanvasView: NSView {
             constrainedPt = pt
         }
 
-        let adjPt = CGPoint(x: constrainedPt.x + cropOffset.x, y: constrainedPt.y + cropOffset.y)
-        activeStroke = AnnotationStroke(tool: currentTool, color: currentColor, width: currentWidth, points: [adjPt])
+        activeStroke = AnnotationStroke(tool: currentTool, color: currentColor, width: currentWidth, points: [constrainedPt])
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -286,14 +287,13 @@ final class CanvasView: NSView {
         }
 
         guard let stroke = activeStroke else { return }
-        let cropOffset = CGPoint.zero
         let constrainedPt: CGPoint
         if rulerGuide.isActive {
             constrainedPt = rulerGuide.constrainToRuler(pt)
         } else {
             constrainedPt = pt
         }
-        stroke.addPoint(CGPoint(x: constrainedPt.x + cropOffset.x, y: constrainedPt.y + cropOffset.y))
+        stroke.addPoint(constrainedPt)
         needsDisplay = true
     }
 
@@ -329,10 +329,4 @@ final class CanvasView: NSView {
         } else { super.keyDown(with: event) }
     }
     deinit { if let observer = changeObserver { NotificationCenter.default.removeObserver(observer) } }
-
-    // MARK: - Scroll/zoom notification
-
-    func handleScrollMagnification(_ scale: CGFloat) {
-        zoomLevel = scale
-    }
 }

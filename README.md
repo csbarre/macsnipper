@@ -32,9 +32,9 @@ Packaging creates `dmg/SnipForMac.dmg`. See [the app guide](mac/README.md) for u
 
 ## Validation
 
-The current implementation passed 80 built-in checks, 10 independent model checks, and 52 export regression checks. These cover image orientation, annotation rendering, eraser geometry, clipboard fallback, undo/redo, crop, stable zoom fitting, and capture session ownership.
+The current implementation passed 185 automated checks: 86 built-in self-tests, 28 model regression checks, and 71 export regression checks. They cover image orientation, annotation rendering and eraser geometry, clipboard fallback, undo/redo, crop, stable zoom fitting, capture session ownership, asynchronous save revisions, adaptive colors, and format encoding and decoding.
 
-Native UI testing on Apple silicon verified repeated rectangle captures, window capture, full capture across two displays, delay completion/cancellation, toolbar recovery, annotation and guides, image opening, corrupt-image errors, saving, crop, undo/redo, and print-to-PDF. The Share picker was exercised without transmitting a capture. Physical shortcut activation, a curved freeform gesture, native color-panel selection, and dragging a selection across display boundaries still need manual acceptance; automated geometry tests do not replace those checks. Unusual color profiles and all possible display configurations are not claimed as validated.
+Native UI testing on Apple silicon repeated rectangle capture, window capture, full capture across two displays, delay completion/cancellation, toolbar recovery, annotations and guides, image opening, corrupt-image errors, four-format saving, crop, undo/redo, clipboard replacement, preference persistence, and print-to-PDF. The crop-edge display mismatch found in this loop was fixed and retested. The Share picker was opened without transmitting a capture. No failures remain in the completed checks. Physical shortcut activation, a curved freeform gesture, native color-panel selection, and dragging a selection across display boundaries still require manual acceptance; model tests do not establish those UI inputs. Unusual color profiles and all possible display configurations are not claimed as validated.
 
 ## Repository scope
 

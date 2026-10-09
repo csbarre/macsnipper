@@ -80,7 +80,7 @@ final class IconGenerator {
         }
 
         // Pivot dot
-        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.setFillColor(NSColor.white.withAlphaComponent(0.95).cgColor)
         let pivotR = s * 0.035
         ctx.fillEllipse(in: CGRect(x: cx - pivotR, y: cy - pivotR, width: pivotR * 2, height: pivotR * 2))
     }

@@ -26,6 +26,7 @@ struct CaptureSessionState {
 
 // Coordinates permission, optional countdown, selection, and still-image capture.
 @available(macOS 14.0, *)
+@MainActor
 final class OverlayController {
     static let shared = OverlayController()
     private init() {}
@@ -94,6 +95,14 @@ final class OverlayController {
         dismissOverlay()
         NSApp.activate(ignoringOtherApps: true)
 
+        // Full desktop capture has no selection step. Avoid creating and showing
+        // overlay windows only to dismiss them again on the same run-loop turn.
+        if mode == .fullscreen {
+            handleSelection(rect: nil, freeformPoints: nil, selectedWindow: nil,
+                onScreen: NSScreen.main ?? firstScreen, sessionID: sessionID)
+            return
+        }
+
         for screen in screens {
             let win = OverlayWindow(screen: screen, mode: mode, content: content)
             win.selectionHandler = { [weak self] selRect, freeformPoints, selectedWindow in
@@ -112,10 +121,6 @@ final class OverlayController {
             overlayWindows.append(win)
         }
 
-        // For fullscreen, immediately proceed without waiting for selection
-        if mode == .fullscreen {
-            handleSelection(rect: nil, freeformPoints: nil, selectedWindow: nil, onScreen: NSScreen.main ?? firstScreen, sessionID: sessionID)
-        }
     }
 
     // MARK: - Handle Selection
@@ -324,7 +329,9 @@ final class SelectionOverlayView: NSView {
     var onCancel: (() -> Void)?
 
     private let mode: CaptureMode
-    private let content: SCShareableContent
+    private let eligibleWindows: [CGWindowID: SCWindow]
+    private var orderedWindowIDs: [CGWindowID] = []
+    private var lastWindowListRefresh = -Double.infinity
     private let screen: NSScreen
 
     // Selection state
@@ -339,7 +346,10 @@ final class SelectionOverlayView: NSView {
 
     init(frame: NSRect, mode: CaptureMode, content: SCShareableContent, screen: NSScreen) {
         self.mode = mode
-        self.content = content
+        eligibleWindows = Dictionary(uniqueKeysWithValues: content.windows.filter {
+            $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width > 1 && $0.frame.height > 1 &&
+            $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier
+        }.map { ($0.windowID, $0) })
         self.screen = screen
         super.init(frame: frame)
         wantsLayer = true
@@ -435,17 +445,17 @@ final class SelectionOverlayView: NSView {
         return frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
     }
 
-    private func windowAtPoint(_ viewPoint: CGPoint) -> SCWindow? {
+    private func windowAtPoint(_ viewPoint: CGPoint, refreshNow: Bool = false) -> SCWindow? {
         let screenPoint = CGPoint(x: viewPoint.x + screen.frame.minX, y: viewPoint.y + screen.frame.minY)
         // CGWindowList's on-screen ordering is front-to-back, unlike window layers.
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let eligible = Dictionary(uniqueKeysWithValues: content.windows.filter {
-            $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width > 1 && $0.frame.height > 1 &&
-            $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier
-        }.map { ($0.windowID, $0) })
-        for info in windows {
-            guard let id = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                  let window = eligible[id] else { continue }
+        let now = ProcessInfo.processInfo.systemUptime
+        if refreshNow || now - lastWindowListRefresh >= 0.032 {
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            orderedWindowIDs = windows.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }
+            lastWindowListRefresh = now
+        }
+        for id in orderedWindowIDs {
+            guard let window = eligibleWindows[id] else { continue }
             if CaptureManager.appKitFrame(for: window).contains(screenPoint) { return window }
         }
         return nil
@@ -459,7 +469,9 @@ final class SelectionOverlayView: NSView {
         case .fullscreen:
             onSelection?(nil, nil, nil)
         case .window:
-            if let win = windowAtPoint(pt) {
+            // Recheck order on the actual click so hover throttling cannot choose
+            // a stale frontmost window.
+            if let win = windowAtPoint(pt, refreshNow: true) {
                 onSelection?(nil, nil, win)
             }
         case .rectangle:
@@ -524,8 +536,11 @@ final class SelectionOverlayView: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard mode == .window else { return }
         let pt = convert(event.locationInWindow, from: nil)
-        hoveredWindow = windowAtPoint(pt)
-        needsDisplay = true
+        let hovered = windowAtPoint(pt)
+        if hovered?.windowID != hoveredWindow?.windowID {
+            hoveredWindow = hovered
+            needsDisplay = true
+        }
     }
 
     override func keyDown(with event: NSEvent) {

@@ -16,6 +16,48 @@ enum AnnotationTool: Equatable {
 
 // MARK: - Annotation Stroke
 
+// Parse an eraser gesture once and reject distant annotations before testing
+// segment intersections. The bounds comparison includes tangential contact.
+struct EraserTrace {
+    let width: CGFloat
+    let segments: [(CGPoint, CGPoint)]
+    let bounds: CGRect
+
+    init(path: NSBezierPath, width: CGFloat) {
+        self.width = width
+        var points: [CGPoint] = []
+        for index in 0..<path.elementCount {
+            var associated = [NSPoint](repeating: .zero, count: 3)
+            switch path.element(at: index, associatedPoints: &associated) {
+            case .moveTo, .lineTo: points.append(associated[0])
+            case .curveTo: points.append(contentsOf: associated)
+            default: break
+            }
+        }
+        segments = Self.segments(points)
+        bounds = Self.bounds(points)
+    }
+
+    static func segments(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
+        points.count == 1 ? [(points[0], points[0])] : Array(zip(points, points.dropFirst()))
+    }
+    static func bounds(_ points: [CGPoint]) -> CGRect {
+        guard let first = points.first else { return .null }
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for point in points.dropFirst() {
+            minX = min(minX, point.x); maxX = max(maxX, point.x)
+            minY = min(minY, point.y); maxY = max(maxY, point.y)
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+    func overlaps(_ annotationBounds: CGRect, padding: CGFloat) -> Bool {
+        guard !bounds.isNull, !annotationBounds.isNull else { return false }
+        let expanded = annotationBounds.insetBy(dx: -padding, dy: -padding)
+        return bounds.maxX >= expanded.minX && bounds.minX <= expanded.maxX &&
+            bounds.maxY >= expanded.minY && bounds.minY <= expanded.maxY
+    }
+}
+
 final class AnnotationStroke: NSObject {
     let tool: AnnotationTool
     let color: NSColor
@@ -61,8 +103,8 @@ final class AnnotationStroke: NSObject {
         points.append(point)
     }
 
-    func copyStroke() -> AnnotationStroke {
-        let result = AnnotationStroke(tool: tool, color: color, width: width, points: points)
+    func copyStroke(color resolvedColor: NSColor? = nil) -> AnnotationStroke {
+        let result = AnnotationStroke(tool: tool, color: resolvedColor ?? color, width: width, points: points)
         result.textContent = textContent
         result.textOrigin = textOrigin
         result.opacity = opacity
@@ -70,39 +112,32 @@ final class AnnotationStroke: NSObject {
     }
 
     func isHit(byEraserPath eraserPath: NSBezierPath, width eraserWidth: CGFloat) -> Bool {
-        var eraserPoints: [CGPoint] = []
-        for index in 0..<eraserPath.elementCount {
-            var associated = [NSPoint](repeating: .zero, count: 3)
-            let element = eraserPath.element(at: index, associatedPoints: &associated)
-            switch element {
-            case .moveTo, .lineTo: eraserPoints.append(associated[0])
-            case .curveTo: eraserPoints.append(contentsOf: associated)
-            default: break
-            }
-        }
-        guard !eraserPoints.isEmpty else { return false }
-        let radius = (eraserWidth + width) / 2
+        isHit(by: EraserTrace(path: eraserPath, width: eraserWidth))
+    }
+
+    func isHit(by trace: EraserTrace) -> Bool {
+        guard !trace.segments.isEmpty else { return false }
+        let radius = (trace.width + width) / 2
         let candidates = points.isEmpty ? (textOrigin.map { [$0] } ?? []) : points
         guard !candidates.isEmpty else { return false }
-        func segments(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
-            points.count == 1 ? [(points[0], points[0])] : Array(zip(points, points.dropFirst()))
-        }
         if tool == .text, let origin = textOrigin, let text = textContent {
             let size = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: max(width * 3, 12))])
-            let bounds = CGRect(origin: origin, size: size).insetBy(dx: -eraserWidth / 2, dy: -eraserWidth / 2)
+            let bounds = CGRect(origin: origin, size: size).insetBy(dx: -trace.width / 2, dy: -trace.width / 2)
+            guard trace.overlaps(bounds, padding: 0) else { return false }
             let corners = [CGPoint(x: bounds.minX, y: bounds.minY), CGPoint(x: bounds.maxX, y: bounds.minY),
                            CGPoint(x: bounds.maxX, y: bounds.maxY), CGPoint(x: bounds.minX, y: bounds.maxY)]
             let edges = Array(zip(corners, Array(corners.dropFirst()) + [corners[0]]))
             // Fast drags can have both sampled endpoints outside the text. Test
             // every intervening segment against the whole annotation bounds.
-            return segments(eraserPoints).contains { a, b in
+            return trace.segments.contains { a, b in
                 bounds.contains(a) || bounds.contains(b) || edges.contains { c, d in
                     Self.segmentDistance(a, b, c, d) <= 0.000001
                 }
             }
         }
-        for (a, b) in segments(candidates) {
-            for (c, d) in segments(eraserPoints) {
+        guard trace.overlaps(EraserTrace.bounds(candidates), padding: radius) else { return false }
+        for (a, b) in EraserTrace.segments(candidates) {
+            for (c, d) in trace.segments {
                 if Self.segmentDistance(a, b, c, d) <= radius { return true }
             }
         }
@@ -261,12 +296,10 @@ final class AnnotationRenderer {
         // Match the editor's flipped (top-left) coordinates without flipping the base image.
         context.translateBy(x: 0, y: CGFloat(base.height))
         context.scaleBy(x: 1, y: -1)
-        for stroke in strokes {
-            let adjusted = stroke.copyStroke()
-            adjusted.points = adjusted.points.map { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) }
-            if let text = adjusted.textOrigin { adjusted.textOrigin = CGPoint(x: text.x - origin.x, y: text.y - origin.y) }
-            adjusted.draw(in: context, scale: scale)
-        }
+        // Translate the drawing context rather than allocating translated copies
+        // of every annotation and point array during export.
+        context.translateBy(x: -origin.x * scale, y: -origin.y * scale)
+        for stroke in strokes { stroke.draw(in: context, scale: scale) }
         return context.makeImage()
     }
 }

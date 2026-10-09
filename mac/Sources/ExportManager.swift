@@ -34,6 +34,7 @@ enum ExportFormat: String, CaseIterable {
 final class ExportManager {
     static let shared = ExportManager()
     private init() {}
+    private let fileQueue = DispatchQueue(label: "local.macsnipper.file-operations", qos: .userInitiated)
 
     // MARK: - Encode
 
@@ -130,28 +131,45 @@ final class ExportManager {
     }
 
     func save(document: ImageDocument, to url: URL, completion: @escaping (Bool) -> Void) {
-        guard let flat = document.renderFlatImage() else { completion(false); return }
-        let ext = url.pathExtension.lowercased()
-        let format: ExportFormat
-        switch ext {
-        case "jpg", "jpeg": format = .jpeg
-        case "tiff", "tif": format = .tiff
-        case "gif": format = .gif
-        default: format = .png
+        let snapshot = document.snapshotForExport()
+        write(snapshot: snapshot, to: url) { result in
+            switch result {
+            case .success:
+                document.markSaved(at: url, revision: snapshot.revision)
+                Settings.shared.lastSaveDirectory = url.deletingLastPathComponent()
+                // A save-before-replacement action must not discard edits made
+                // while the immutable snapshot was being written.
+                completion(!document.isDirty)
+            case .failure(let error):
+                let alert = NSAlert()
+                alert.messageText = "Could not save image"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+                completion(false)
+            }
         }
-        guard let data = encode(image: flat, format: format) else { completion(false); return }
-        do {
-            try data.write(to: url, options: .atomic)
-            document.markSaved(at: url)
-            Settings.shared.lastSaveDirectory = url.deletingLastPathComponent()
-            completion(true)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could not save image"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
-            completion(false)
+    }
+
+    func write(snapshot: ImageDocument.ExportSnapshot, to url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
+        fileQueue.async {
+            let result: Result<Void, Error> = autoreleasepool {
+                do {
+                    guard let flat = snapshot.render() else { throw self.fileError("The image could not be rendered.") }
+                    let format = ExportFormat.allCases.first { candidate in
+                        candidate.fileExtension == url.pathExtension.lowercased() ||
+                        (candidate == .jpeg && url.pathExtension.lowercased() == "jpeg") ||
+                        (candidate == .tiff && url.pathExtension.lowercased() == "tif")
+                    } ?? .png
+                    guard let data = self.encode(image: flat, format: format) else { throw self.fileError("The image could not be encoded.") }
+                    try data.write(to: url, options: .atomic)
+                    return .success(())
+                } catch { return .failure(error) }
+            }
+            DispatchQueue.main.async { completion(result) }
         }
+    }
+    private func fileError(_ message: String) -> Error {
+        NSError(domain: "MacsnipperImage", code: 2, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     // MARK: - Open Image
@@ -165,6 +183,13 @@ final class ExportManager {
         return decoded
     }
 
+    func loadImageAsync(from url: URL, completion: @escaping (Result<(CGImage, CGFloat), Error>) -> Void) {
+        fileQueue.async {
+            let result = autoreleasepool { Result { try self.loadImage(from: url) } }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     func showOpenError(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Could not open image"
@@ -172,7 +197,7 @@ final class ExportManager {
         alert.runModal()
     }
 
-    func runOpenDialog(completion: @escaping (CGImage?, CGFloat, URL?) -> Void) {
+    func runOpenDialog(shouldComplete: @escaping () -> Bool = { true }, completion: @escaping (CGImage?, CGFloat, URL?) -> Void) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType.png, UTType.jpeg, UTType.tiff, UTType(filenameExtension: "gif")].compactMap { $0 }
         panel.canChooseFiles = true
@@ -181,12 +206,14 @@ final class ExportManager {
 
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { completion(nil, 1, nil); return }
-        do {
-            let (image, scale) = try loadImage(from: url)
-            completion(image, scale, url)
-        } catch {
-            showOpenError(error)
-            completion(nil, 1, nil)
+        loadImageAsync(from: url) { result in
+            guard shouldComplete() else { return }
+            switch result {
+            case .success(let (image, scale)): completion(image, scale, url)
+            case .failure(let error):
+                self.showOpenError(error)
+                completion(nil, 1, nil)
+            }
         }
     }
 

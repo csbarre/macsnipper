@@ -17,21 +17,39 @@ final class SelfTest {
     }
 
     private func runAll() {
+        let previousMode = Settings.shared.lastCaptureMode
+        let previousDelay = Settings.shared.lastCaptureDelay
+        Settings.shared.lastCaptureMode = .window
+        Settings.shared.lastCaptureDelay = .three
+        defer {
+            Settings.shared.lastCaptureMode = previousMode
+            Settings.shared.lastCaptureDelay = previousDelay
+        }
         let controller = EditorWindowController.shared
         controller.window?.contentView?.layoutSubtreeIfNeeded()
         let frame = controller.window?.frame ?? .zero
         assert(frame.width >= 720 && frame.height >= 520, "Editor initial window size", details: "\(frame)")
         assert(controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "saveButton" })?.isEnabled == false, "Save starts disabled without an image")
+        let mode = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "captureMode" })?.view as? NSSegmentedControl
+        let delay = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "captureDelay" })?.view as? NSPopUpButton
+        assert(mode?.selectedSegment == 2 && delay?.indexOfSelectedItem == 1, "Toolbar restores saved capture mode and delay")
+        mode?.selectedSegment = 1
+        if let mode = mode { _ = mode.sendAction(mode.action, to: mode.target) }
+        delay?.selectItem(at: 2)
+        if let delay = delay { _ = delay.sendAction(delay.action, to: delay.target) }
+        assert(Settings.shared.lastCaptureMode == .freeform && Settings.shared.lastCaptureDelay == .ten, "Toolbar selection persists capture preferences")
         assert(!FreeformMask(points: [CGPoint(x: 0, y: 0), CGPoint(x: 20, y: 20), CGPoint(x: 40, y: 40)]).hasEnclosedArea, "Straight freeform drag is rejected")
         assert(FreeformMask(points: [CGPoint(x: 0, y: 0), CGPoint(x: 40, y: 0), CGPoint(x: 20, y: 40)]).hasEnclosedArea, "Closed freeform shape is accepted")
         testToolbarReactivation()
         testFitAndGuides()
+        testCheckerboardDirtyRegion()
         testCaptureSessionsAndPaste()
         testGeometry()
         testRetinaSizing()
         testFlippedOrientation()
         testFreeformMask()
         testAnnotationRendering()
+        testAnnotationClipsToImageRect()
         testCropUndoable()
         testEncodeDecodeFormats()
         testClipboardRoundtrip()
@@ -92,6 +110,30 @@ final class SelfTest {
         guide.protractorCenter = CGPoint(x: 100, y: 100)
         let circular = guide.constrainToRuler(CGPoint(x: 100, y: 200))
         assertNear(circular.y, 180, "Protractor constrains drawing to its circle")
+    }
+
+    private func testCheckerboardDirtyRegion() {
+        guard let transparent = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage(),
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+            let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else { assert(false, "Checkerboard fixture"); return }
+        let document = ImageDocument(image: transparent)
+        let canvas = CanvasView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
+        canvas.document = document
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        graphics.cgContext.clear(CGRect(x: 0, y: 0, width: 32, height: 32))
+        canvas.draw(CGRect(x: 9, y: 9, width: 14, height: 14))
+        NSGraphicsContext.restoreGraphicsState()
+        // This offscreen CGContext has a bottom-left origin. Bitmap sample rows
+        // are top-left, so sample the raster row corresponding to logical y=10.
+        let rasterY = bitmap.pixelsHigh - 1 - 10
+        let light = bitmap.colorAt(x: 10, y: rasterY)?.usingColorSpace(.deviceRGB)
+        let dark = bitmap.colorAt(x: 18, y: rasterY)?.usingColorSpace(.deviceRGB)
+        assert((light?.redComponent ?? 0) > 0.95 && (dark?.redComponent ?? 1) < 0.9, "Partial repaint preserves checkerboard tile parity")
+        assert((bitmap.colorAt(x: 2, y: 2)?.alphaComponent ?? 1) < 0.01, "Checkerboard does not paint outside the dirty image region")
     }
 
     private func testCaptureSessionsAndPaste() {
@@ -252,6 +294,48 @@ final class SelfTest {
         doc.commitStroke(hStroke)
         let flat2 = doc.renderFlatImage()
         assert(flat2 != nil, "Render with highlighter annotation")
+    }
+
+    private func testAnnotationClipsToImageRect() {
+        // A 32x32 image rendered into a 48x48 bitmap. The canvas frame is overridden
+        // to 48x48 after document assignment so a stroke crossing the imageRect edge
+        // has room to bleed if clipping is absent.
+        guard let base = makeTestImage(width: 32, height: 32, color: .white) else {
+            assert(false, "Annotation clip test: create base image"); return
+        }
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 48, pixelsHigh: 48,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+            let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            assert(false, "Annotation clip test: create bitmap"); return
+        }
+        let doc = ImageDocument(image: base, scale: 1.0)
+        // Stroke starts inside imageRect (0,0,32,32) and ends well outside at (44,44)
+        let stroke = AnnotationStroke(tool: .pen, color: .red, width: 6,
+                                      points: [CGPoint(x: 20, y: 20), CGPoint(x: 44, y: 44)])
+        doc.commitStroke(stroke)
+        let canvas = CanvasView(frame: CGRect(x: 0, y: 0, width: 48, height: 48))
+        canvas.document = doc
+        // updateSize() resizes canvas to 32x32; override to 48x48 so the stroke endpoint
+        // at (44,44) is within the draw rect and would bleed if not clipped
+        canvas.frame = CGRect(x: 0, y: 0, width: 48, height: 48)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        graphics.cgContext.clear(CGRect(x: 0, y: 0, width: 48, height: 48))
+        canvas.draw(CGRect(x: 0, y: 0, width: 48, height: 48))
+        NSGraphicsContext.restoreGraphicsState()
+        // The CGContext origin is bottom-left; NSBitmapImageRep rows are top-left.
+        // rasterRow = pixelsHigh - 1 - cgY
+        // The stroke path is the line y=x, so (26,26) CGContext coords is on the path
+        // inside imageRect. Expect the red stroke to be visible (green < 0.3 over white).
+        let rasterYIn = bitmap.pixelsHigh - 1 - 26
+        let colorIn = bitmap.colorAt(x: 26, y: rasterYIn)?.usingColorSpace(.deviceRGB)
+        assert((colorIn?.greenComponent ?? 1) < 0.3, "Red annotation stroke visible inside imageRect")
+        // (38,38) CGContext coords is on the same path but outside imageRect; must be
+        // transparent after clipping -- alpha near zero, not opaque stroke paint.
+        let rasterYOut = bitmap.pixelsHigh - 1 - 38
+        let alphaOut = bitmap.colorAt(x: 38, y: rasterYOut)?.usingColorSpace(.deviceRGB)?.alphaComponent ?? 1
+        assert(alphaOut < 0.01, "Annotation stroke does not bleed outside imageRect")
     }
 
     private func testCropUndoable() {

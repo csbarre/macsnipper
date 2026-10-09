@@ -11,6 +11,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private var imageDocument: ImageDocument?
     private var quitApproved = false
     private var pendingDocument: ImageDocument?  // preserved while capture overlay is up
+    private var loadRequest = UUID()
 
     // Toolbar refs
     private var toolbar: NSToolbar!
@@ -21,19 +22,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private var widthStepper: NSStepper!
     private var widthLabel: NSTextField!
     private var undoRedoControl: NSSegmentedControl?
-    private var zoomLabel: NSTextField!
-    private var guideToggle: NSButton!
-    private var protractorToggle: NSButton!
-    private var guideMode: GuideMode = .ruler
 
     // Status bar
     private var statusBar: NSView!
     private var statusLabel: NSTextField!
     private var zoomStatusLabel: NSTextField!
-
-    // Text annotation state
-    private var isTextMode = false
-    private var pendingTextPoint: CGPoint?
 
     private init() {
         // Build window
@@ -203,18 +196,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     // MARK: - Document loading
 
     func openFile(_ url: URL) {
-        let image: CGImage, scale: CGFloat
-        do { (image, scale) = try ExportManager.shared.loadImage(from: url) }
-        catch { ExportManager.shared.showOpenError(error); return }
-        confirmReplacement { [weak self] in
-            let doc = ImageDocument(image: image, scale: scale)
-            doc.sourceURL = url
-            self?.loadDocument(doc)
-            self?.showWindow(nil)
+        let request = UUID()
+        loadRequest = request
+        ExportManager.shared.loadImageAsync(from: url) { [weak self] result in
+            guard let self = self, self.loadRequest == request else { return }
+            switch result {
+            case .success(let (image, scale)):
+                self.confirmReplacement { [weak self] in
+                    guard let self = self, self.loadRequest == request else { return }
+                    let doc = ImageDocument(image: image, scale: scale)
+                    doc.sourceURL = url
+                    self.loadDocument(doc)
+                    self.showWindow(nil)
+                }
+            case .failure(let error): ExportManager.shared.showOpenError(error)
+            }
         }
     }
 
     func loadDocument(_ doc: ImageDocument) {
+        loadRequest = UUID()
         imageDocument = doc
         canvasView.document = doc
         canvasView.isCroppingActive = false
@@ -306,6 +307,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     private func startCapture() {
+        loadRequest = UUID()
         // Preserve current imageDocument in case capture is cancelled
         pendingDocument = imageDocument
         let mode = captureMode()
@@ -350,11 +352,20 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     private func runOpenDialog() {
-        ExportManager.shared.runOpenDialog { [weak self] image, scale, url in
-            guard let self = self, let image = image else { return }
-            let doc = ImageDocument(image: image, scale: scale)
-            doc.sourceURL = url
-            self.loadDocument(doc)
+        let request = UUID()
+        loadRequest = request
+        let priorDocument = imageDocument
+        let priorRevision = imageDocument?.revisionIdentifier
+        ExportManager.shared.runOpenDialog(shouldComplete: { [weak self] in self?.loadRequest == request }) { [weak self] image, scale, url in
+            guard let self = self, self.loadRequest == request, let image = image else { return }
+            let load = { [weak self] in
+                guard let self = self, self.loadRequest == request else { return }
+                let doc = ImageDocument(image: image, scale: scale)
+                doc.sourceURL = url
+                self.loadDocument(doc)
+            }
+            if self.imageDocument === priorDocument && self.imageDocument?.revisionIdentifier == priorRevision { load() }
+            else { self.confirmReplacement(load) }
         }
     }
 
@@ -443,7 +454,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         canvasView.currentTool = t
         canvasView.isCroppingActive = false
         canvasView.cropSelectionRect = nil
-        isTextMode = (t == .text)
     }
 
     @objc func colorChanged(_ sender: NSColorWell) {
@@ -453,6 +463,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func widthChanged(_ sender: NSStepper) {
         canvasView.currentWidth = CGFloat(sender.intValue)
         widthLabel?.stringValue = "\(sender.intValue)px"
+    }
+
+    @objc private func captureSettingsChanged(_ sender: Any?) {
+        Settings.shared.lastCaptureMode = captureMode()
+        Settings.shared.lastCaptureDelay = captureDelay()
     }
 
     @objc func toggleCrop(_ sender: Any?) {
@@ -475,14 +490,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     @objc func toggleRuler(_ sender: Any?) {
-        guideMode = .ruler
         let isOn = !canvasView.rulerGuide.isActive || canvasView.rulerGuide.mode != .ruler
         canvasView.rulerGuide.mode = .ruler
         canvasView.rulerGuide.isActive = isOn
     }
 
     @objc func toggleProtractor(_ sender: Any?) {
-        guideMode = .protractor
         let isOn = !canvasView.rulerGuide.isActive || canvasView.rulerGuide.mode != .protractor
         canvasView.rulerGuide.mode = .protractor
         canvasView.rulerGuide.isActive = isOn
@@ -490,6 +503,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     @objc func chooseCaptureMode(_ sender: NSMenuItem) {
         modeSegmented.selectedSegment = sender.tag
+        captureSettingsChanged(sender)
         newCapture(nil)
     }
 
@@ -587,8 +601,8 @@ extension EditorWindowController: NSToolbarDelegate {
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Mode"
             let seg = NSSegmentedControl(labels: ["Rect", "Free", "Win", "Full"],
-                                         trackingMode: .selectOne, target: nil, action: nil)
-            seg.selectedSegment = 0
+                                         trackingMode: .selectOne, target: self, action: #selector(captureSettingsChanged(_:)))
+            seg.selectedSegment = Settings.shared.lastCaptureMode.rawValue
             seg.segmentStyle = .capsule
             seg.controlSize = .small
             modeSegmented = seg
@@ -603,6 +617,9 @@ extension EditorWindowController: NSToolbarDelegate {
             popup.addItem(withTitle: "3s")
             popup.addItem(withTitle: "10s")
             popup.controlSize = .small
+            popup.selectItem(at: CaptureDelay.allCases.firstIndex(of: Settings.shared.lastCaptureDelay) ?? 0)
+            popup.target = self
+            popup.action = #selector(captureSettingsChanged(_:))
             delayPopup = popup
             item.view = popup
             return sized(item)
@@ -678,7 +695,6 @@ extension EditorWindowController: NSToolbarDelegate {
                 sym("arrow.uturn.forward", "Redo"),
             ], trackingMode: .momentary, target: self, action: #selector(undoRedoSegment(_:)))
             seg.segmentStyle = .capsule
-            item.view = seg
             undoRedoControl = seg
             item.view = seg
             return sized(item)
@@ -724,9 +740,13 @@ extension EditorWindowController: NSToolbarDelegate {
         let widths: [String: CGFloat] = ["captureMode": 160, "captureDelay": 90, "drawTools": 180, "colorWell": 38, "strokeWidth": 64, "undoRedo": 64]
         let size = NSSize(width: widths[item.itemIdentifier.rawValue] ?? 36, height: 28)
         item.autovalidates = false
-        item.view?.frame.size = size
-        item.minSize = size
-        item.maxSize = size
+        if let view = item.view {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                view.widthAnchor.constraint(equalToConstant: size.width),
+                view.heightAnchor.constraint(equalToConstant: size.height)
+            ])
+        }
         return item
     }
 }

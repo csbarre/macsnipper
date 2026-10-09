@@ -1,0 +1,20 @@
+# Public source allowlist. Private inputs and local artifacts stay untracked.
+/*
+!/.gitignore
+!/README.md
+!/mac/
+!/tests/
+/mac/*
+!/mac/Sources/
+!/mac/Info.plist
+!/mac/README.md
+!/mac/build.sh
+!/mac/package.sh
+/mac/Sources/*
+!/mac/Sources/*.swift
+/tests/*
+!/tests/model-regression/
+/tests/model-regression/*
+!/tests/model-regression/main.swift
+!/tests/model-regression/run.sh
+.DS_Store

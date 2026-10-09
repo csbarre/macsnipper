@@ -11,6 +11,10 @@
 /assembly/*
 !/assembly/*.asm
 !/assembly/README.md
+!/assembly/annotate.py
+!/assembly/test_annotate.py
+!/assembly/verify_annotations.py
+!/assembly/test_verification.py
 /binaries/*
 !/binaries/AppxManifest.xml
 !/binaries/ScreenSketch.exe
